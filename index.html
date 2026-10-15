@@ -2979,6 +2979,13 @@ html, body { margin: 0; background: #000000; }
       var boardState = "idle";
       var boardFetchedAt = 0;
       var lastSubmit = -1;
+      /* 实时榜：ntfy 的 SSE 长连接，有新成绩会被推过来，不用轮询 */
+      var boardStream = null;
+      var boardLive = false;
+      var boardSeen = {};
+      var boardSeenCount = 0;
+      var boardRetry = 0;
+      var boardPollTimer = 0;
       var lastDropAt = 0;
       var firstSettleDone = false;
       var suppressDrop = false;
@@ -3139,9 +3146,15 @@ html, body { margin: 0; background: #000000; }
 
       /* 把局部小圆换算到世界坐标（跟着刚体一起转，和大奶娃的 syncParts 一致） */
       function syncParts(b) {
-        var rad = b.angle * 0.0174532925199433;
-        var c = Math.cos(rad);
-        var s = Math.sin(rad);
+        /* 角度没变就不重算三角函数（一次求解里会被反复调用） */
+        if (b.angC !== b.angle || b.cosA === undefined) {
+          var rad = b.angle * 0.0174532925199433;
+          b.cosA = Math.cos(rad);
+          b.sinA = Math.sin(rad);
+          b.angC = b.angle;
+        }
+        var c = b.cosA;
+        var s = b.sinA;
         var ps = b.parts;
         var dr = b.dr;
         var wx = b.wx;
@@ -3154,6 +3167,15 @@ html, body { margin: 0; background: #000000; }
           wy[i] = b.y + ox * s + oy * c;
           ws[i] = ps[i][2] * dr;
         }
+        b.dirty = 0;
+      }
+
+      /* 位置动过的球，延后到下一趟求解再同步一次世界坐标（省掉大量重复计算） */
+      function syncDirty() {
+        for (var i = 0; i < bodies.length; i++) {
+          var b = bodies[i];
+          if (b.dirty) syncParts(b);
+        }
       }
 
       var GJ_NX = 0;
@@ -3161,27 +3183,36 @@ html, body { margin: 0; background: #000000; }
       var partTests = 0; /* 调试用计数：走过多少对子圆（评估手机端开销） */
 
       /* 两球之间最深的一对子圆：返回 gap（<0 = 插进去了），法线放进 GJ_NX/GJ_NY */
-      function pairGap(a, b) {
-        var pa = a.parts.length;
-        var pb = b.parts.length;
-        var farB = b.r + SAFE;
+      /* pad：比 SAFE 更宽松的探测余量，第一趟全量搜索时用它把“快要碰到”的球对也记下来 */
+      function pairGap(a, b, pad) {
+        var awx = a.wx;
+        var awy = a.wy;
+        var aws = a.ws;
+        var bwx = b.wx;
+        var bwy = b.wy;
+        var bws = b.ws;
+        var pa = aws.length;
+        var pb = bws.length;
+        var farB = b.r + pad;
         var minGap = Infinity;
         var bnx = 0;
         var bny = 0;
+        var bx0 = b.x;
+        var by0 = b.y;
         for (var m = 0; m < pa; m++) {
-          var ax = a.wx[m];
-          var ay = a.wy[m];
-          var ar = a.ws[m];
-          var ddx = b.x - ax;
-          var ddy = b.y - ay;
+          var ax = awx[m];
+          var ay = awy[m];
+          var ar = aws[m];
+          var ddx = bx0 - ax;
+          var ddy = by0 - ay;
           var far = farB + ar;
           if (ddx * ddx + ddy * ddy >= far * far) continue;
           for (var k = 0; k < pb; k++) {
             partTests++;
-            var dx = b.wx[k] - ax;
-            var dy = b.wy[k] - ay;
-            var rsum = ar + b.ws[k];
-            var reach = rsum + SAFE;
+            var dx = bwx[k] - ax;
+            var dy = bwy[k] - ay;
+            var rsum = ar + bws[k];
+            var reach = rsum + pad;
             var d2 = dx * dx + dy * dy;
             if (d2 >= reach * reach) continue;
             var d = Math.sqrt(d2);
@@ -3251,6 +3282,7 @@ html, body { margin: 0; background: #000000; }
       }
 
       function solveWalls() {
+        syncDirty();
         for (var i = 0; i < bodies.length; i++) {
           var b = bodies[i];
           /* 每个子圆各自贴墙，取最深的那个推一次（大奶娃的做法） */
@@ -3281,39 +3313,89 @@ html, body { margin: 0; background: #000000; }
       /* 本子步的接触列表：位置约束会吃掉一部分法向速度，弹性冲量用它来还原（大奶娃的做法） */
       var solvePass = 0;
       var contacts = [];
+      /* 接触缓存：一子步里只全量搜一次，后面几趟只重算“已经贴上/快贴上”的球对 */
+      var HOT_PAD = 6;
+      var hotList = [];
 
       function solvePairs(k) {
+        syncDirty();
         var n = bodies.length;
         var first = solvePass === 0;
-        for (var i = 0; i < n; i++) {
-          var a = bodies[i];
-          for (var j = i + 1; j < n; j++) {
-            var b = bodies[j];
-            var cdx = b.x - a.x;
-            var cdy = b.y - a.y;
-            var rsum = a.r + b.r;
-            /* 包围圆粗筛（大奶娃的 rb 快筛） */
-            if (cdx * cdx + cdy * cdy >= rsum * rsum) continue;
-            var gap = pairGap(a, b);
+        var i;
+        var j;
+        var a;
+        var b;
+        var gap;
+        var ia;
+        var ib;
+        var wsum;
+        var fa;
+        var corr;
+        if (first) hotList.length = 0;
+        var count = first ? n : hotList.length;
+        for (var h = 0; h < count; h++) {
+          if (first) {
+            i = h;
+            a = bodies[i];
+            for (j = i + 1; j < n; j++) {
+              b = bodies[j];
+              var cdx = b.x - a.x;
+              var cdy = b.y - a.y;
+              var rsum = a.r + b.r;
+              /* 包围圆粗筛（大奶娃的 rb 快筛） */
+              if (cdx * cdx + cdy * cdy >= rsum * rsum) continue;
+              gap = pairGap(a, b, HOT_PAD);
+              if (gap === null) continue;
+              /* 记进本子步的“热点对”，后面几趟就只算这些 */
+              if (gap < HOT_PAD) hotList.push(i * n + j);
+              if (gap >= 0) {
+                a.touch = true;
+                b.touch = true;
+                continue;
+              }
+              a.touch = true;
+              b.touch = true;
+              contacts.push({ a: a, b: b, nx: GJ_NX, ny: GJ_NY });
+              ia = a.asleep ? 0 : a.invMass;
+              ib = b.asleep ? 0 : b.invMass;
+              wsum = ia + ib;
+              if (wsum <= 0) continue;
+              /* 只修最深的那一对子圆，单次最多 4px，防过冲（大奶娃的 corr） */
+              corr = Math.min(-gap - SLOP, 4) * 0.9 * k;
+              if (corr <= 0) continue;
+              fa = ia / wsum;
+              a.x -= GJ_NX * corr * fa;
+              a.y -= GJ_NY * corr * fa;
+              b.x += GJ_NX * corr * (1 - fa);
+              b.y += GJ_NY * corr * (1 - fa);
+              a.dirty = 1;
+              b.dirty = 1;
+            }
+          } else {
+            var code = hotList[h];
+            i = (code / n) | 0;
+            j = code - i * n;
+            a = bodies[i];
+            b = bodies[j];
+            if (!a || !b) continue;
+            gap = pairGap(a, b, SAFE);
             if (gap === null) continue;
             a.touch = true;
             b.touch = true;
-            if (gap >= 0) continue; /* 只是挨着，不用推开 */
-            if (first) contacts.push({ a: a, b: b, nx: GJ_NX, ny: GJ_NY });
-            var ia = a.asleep ? 0 : a.invMass;
-            var ib = b.asleep ? 0 : b.invMass;
-            var wsum = ia + ib;
+            if (gap >= 0) continue;
+            ia = a.asleep ? 0 : a.invMass;
+            ib = b.asleep ? 0 : b.invMass;
+            wsum = ia + ib;
             if (wsum <= 0) continue;
-            /* 只修最深的那一对子圆，单次最多 4px，防过冲（大奶娃的 corr） */
-            var corr = Math.min(-gap - SLOP, 4) * 0.9 * k;
+            corr = Math.min(-gap - SLOP, 4) * 0.9 * k;
             if (corr <= 0) continue;
-            var fa = ia / wsum;
+            fa = ia / wsum;
             a.x -= GJ_NX * corr * fa;
             a.y -= GJ_NY * corr * fa;
             b.x += GJ_NX * corr * (1 - fa);
             b.y += GJ_NY * corr * (1 - fa);
-            syncParts(a);
-            syncParts(b);
+            a.dirty = 1;
+            b.dirty = 1;
           }
         }
       }
@@ -3771,6 +3853,8 @@ html, body { margin: 0; background: #000000; }
           if (useSound) playBoom();
           setStatus("合出第 " + (MAX_TIER + 1) + " 级「" + TIERS[MAX_TIER].name + "」！");
         }
+        /* 球数变了，接触缓存里的下标失效：下一次求解重新全量搜一遍 */
+        solvePass = 0;
         solvePairs(1);
         solveWalls();
         solvePairs(1);
@@ -3797,7 +3881,7 @@ html, body { margin: 0; background: #000000; }
               var d = Math.sqrt(dx * dx + dy * dy);
               /* 合成判定也走网格：任意一对子圆贴上就算贴上（大奶娃的 MERGE_PAD） */
               if (d >= p.r + q.r + SAFE) continue;
-              var gap = pairGap(p, q);
+              var gap = pairGap(p, q, SAFE);
               if (gap === null || gap > SAFE) continue;
               if (p.t >= MAX_TIER) {
                 if (topA < 0) {
@@ -4062,11 +4146,16 @@ html, body { margin: 0; background: #000000; }
         if (dialogActionsEl) dialogActionsEl.hidden = !isRevive;
         if (overActionsEl) overActionsEl.hidden = isRevive;
         if (reviveBtn) reviveBtn.textContent = "用一枚复活币（剩 " + coins + "）";
-        if (!isRevive) fetchBoard(true);
+        if (!isRevive) {
+          /* 结算面板里的前三名也要实时更新 */
+          boardSync();
+          fetchBoard(true);
+        }
       }
 
       function hideDialog() {
         if (overlayEl) overlayEl.hidden = true;
+        boardSync();
       }
 
       function triggerOver() {
@@ -4094,6 +4183,7 @@ html, body { margin: 0; background: #000000; }
             removed++;
           }
         }
+        solvePass = 0;
         solvePairs(1);
         solveWalls();
         wakeAll();
@@ -4199,6 +4289,7 @@ html, body { margin: 0; background: #000000; }
         if (boardFoot) {
           var line = "本机最高 " + best;
           if (boardState === "loading") line = "正在同步线上榜…";
+          else if (boardState === "ok" && boardLive) line = "● 实时同步中 · " + boardRows.length + " 条 · 本机最高 " + best;
           else if (boardState === "ok") line = "线上榜 · " + boardRows.length + " 条 · 本机最高 " + best;
           else if (boardState === "error") line = "连不上线上榜 · 离线模式 · 本机最高 " + best;
           boardFoot.textContent = line;
@@ -4206,11 +4297,128 @@ html, body { margin: 0; background: #000000; }
       }
 
       /* ---------- 线上榜：ntfy 公共主题，免注册、只追加不覆盖 ---------- */
+      /* 单条消息入库：同一条只收一次，榜上只留最近 400 条 */
+      function boardIngest(env) {
+        if (!env || typeof env !== "object") return false;
+        var id = typeof env.id === "string" ? env.id : "";
+        if (id) {
+          if (boardSeen[id]) return false;
+          boardSeen[id] = 1;
+          boardSeenCount++;
+          if (boardSeenCount > 600) {
+            boardSeen = {};
+            boardSeen[id] = 1;
+            boardSeenCount = 1;
+          }
+        }
+        var payload = null;
+        try {
+          payload = JSON.parse(env.message || "null");
+        } catch (err) {
+          return false;
+        }
+        if (!payload || typeof payload.n !== "string" || typeof payload.s !== "number") return false;
+        boardRows.push({
+          n: payload.n,
+          s: Math.max(0, Math.round(payload.s)),
+          id: id,
+          t: typeof payload.t === "number" ? payload.t : 0
+        });
+        if (boardRows.length > 400) boardRows.splice(0, boardRows.length - 400);
+        return true;
+      }
+
+      /* 排行榜要实时推送的时机：弹窗开着、或者结算面板亮着，而且页面在前台 */
+      function boardWanted() {
+        if (typeof document !== "undefined" && document.hidden) return false;
+        if (isBoardOpen()) return true;
+        return !!(overlayEl && !overlayEl.hidden);
+      }
+
+      function boardStreamOn() {
+        if (boardStream) return true;
+        if (typeof EventSource !== "function") return false;
+        try {
+          boardStream = new EventSource(BOARD_URL + "/sse?since=12h");
+        } catch (err) {
+          boardStream = null;
+          return false;
+        }
+        boardStream.onopen = function () {
+          boardLive = true;
+          boardRetry = 0;
+          boardState = "ok";
+          renderBoard();
+        };
+        boardStream.onmessage = function (ev) {
+          var env = null;
+          try {
+            env = JSON.parse(ev.data);
+          } catch (err) {
+            return;
+          }
+          if (boardIngest(env)) {
+            boardState = "ok";
+            renderBoard();
+            setStatus("排行榜更新了：刚刚有人提交了新成绩。");
+          }
+        };
+        boardStream.onerror = function () {
+          boardLive = false;
+          renderBoard();
+          if (boardStream && boardStream.readyState === 2) {
+            /* 浏览器彻底放弃了：退回到定时拉取 */
+            boardStream = null;
+            boardRetry++;
+            if (boardRetry <= 3 && boardWanted()) {
+              window.setTimeout(function () {
+                if (boardWanted()) boardSync();
+              }, 1200 * boardRetry);
+            } else {
+              boardPollStart();
+            }
+          }
+        };
+        return true;
+      }
+
+      function boardStreamOff() {
+        if (boardStream) {
+          boardStream.close();
+          boardStream = null;
+        }
+        boardLive = false;
+      }
+
+      function boardPollStart() {
+        window.clearTimeout(boardPollTimer);
+        if (!boardWanted() || boardStream) return;
+        fetchBoard(true);
+        boardPollTimer = window.setTimeout(boardPollStart, 6000);
+      }
+
+      /* 开榜单就挂上推送，关掉就断开（省电、省流量） */
+      function boardSync() {
+        if (boardWanted()) {
+          if (boardStreamOn()) {
+            window.clearTimeout(boardPollTimer);
+            boardPollTimer = 0;
+            if (!boardRows.length) fetchBoard(true);
+          } else {
+            boardPollStart();
+          }
+        } else {
+          boardStreamOff();
+          window.clearTimeout(boardPollTimer);
+          boardPollTimer = 0;
+        }
+      }
+
       function fetchBoard(force) {
         var now = Date.now();
         if (!force && now - boardFetchedAt < 4000) return;
         boardFetchedAt = now;
-        boardState = "loading";
+        if (!boardRows.length) boardState = "loading";
         renderBoard();
         var ctl = typeof AbortController === "function" ? new AbortController() : null;
         var timer = window.setTimeout(function () {
@@ -4225,7 +4433,8 @@ html, body { margin: 0; background: #000000; }
           })
           .then(function (text) {
             window.clearTimeout(timer);
-            boardRows = parseBoard(text);
+            var list = parseBoard(text);
+            for (var i = 0; i < list.length; i++) boardIngest(list[i]);
             boardState = "ok";
             renderBoard();
           })
@@ -4236,6 +4445,7 @@ html, body { margin: 0; background: #000000; }
           });
       }
 
+      /* 把 /json 的 NDJSON 每行解析成一条 ntfy 消息（字段和 /sse 一致） */
       function parseBoard(text) {
         var out = [];
         var lines = String(text || "").split("\n");
@@ -4243,13 +4453,9 @@ html, body { margin: 0; background: #000000; }
           var line = lines[i].trim();
           if (!line) continue;
           try {
-            var env = JSON.parse(line);
-            var payload = JSON.parse(env && env.message ? env.message : "null");
-            if (payload && typeof payload.n === "string" && typeof payload.s === "number") {
-              out.push({ n: payload.n, s: Math.max(0, Math.round(payload.s)) });
-            }
+            out.push(JSON.parse(line));
           } catch (err) {
-            /* 跳过不是我们格式的消息 */
+            /* 跳过不是 JSON 的行 */
           }
         }
         return out;
@@ -4262,9 +4468,12 @@ html, body { margin: 0; background: #000000; }
         fetch(BOARD_URL, { method: "POST", body: body, cache: "no-store" })
           .then(function () {
             setStatus("成绩已提交到线上榜。");
-            window.setTimeout(function () {
-              fetchBoard(true);
-            }, 900);
+            /* 实时流会把这条自己推回来，只有没连上流时才手动补一次 */
+            if (!boardStream) {
+              window.setTimeout(function () {
+                fetchBoard(true);
+              }, 900);
+            }
           })
           .catch(function () {
             boardState = "error";
@@ -4280,9 +4489,11 @@ html, body { margin: 0; background: #000000; }
         if (open) {
           if (nickInput) nickInput.value = nick;
           renderBoard();
-          fetchBoard(false);
+          boardSync();
+        } else {
+          boardSync();
         }
-        setStatus(open ? "排行榜：线上成绩每次打开都会同步。" : "回到游戏。");
+        setStatus(open ? "排行榜：实时同步中，有人刷新成绩会立刻出现。" : "回到游戏。");
       }
 
       /* ================= 等级贴图编辑 ================= */
@@ -4474,6 +4685,9 @@ html, body { margin: 0; background: #000000; }
             if (gameOver) restart();
           }
         });
+        /* 切到后台就断开实时流，回到前台再连上 */
+        document.addEventListener("visibilitychange", boardSync);
+        window.addEventListener("pagehide", boardStreamOff);
 
         if (railInput) {
           railInput.addEventListener("input", function () {
@@ -4663,6 +4877,20 @@ html, body { margin: 0; background: #000000; }
           renderNext();
           window.__cgParts = TIERS;
           window.__cgPerf = function () { return partTests; };
+          window.__cgBoard = function () {
+            return {
+              rows: boardRows.length,
+              live: boardLive,
+              state: boardState,
+              ready: boardStream ? boardStream.readyState : -1,
+              wanted: boardWanted()
+            };
+          };
+          window.__cgBoardClose = function () {
+            boardStreamOff();
+            window.clearTimeout(boardPollTimer);
+            boardPollTimer = 0;
+          };
           updateCoins();
           updateScore(false);
           renderTierChips();
