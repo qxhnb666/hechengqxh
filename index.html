@@ -2368,6 +2368,11 @@ html, body { margin: 0; background: #000000; }
       margin: 0;
       padding: 0;
       list-style: none;
+      /* 前十名：小屏放不下就滚动，不撑破面板 */
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
     }
 
     #cg-root .cg-board-row {
@@ -2959,6 +2964,7 @@ html, body { margin: 0; background: #000000; }
       var score = 0;
       var best = 0;
       var chuteTier = 0;
+      var nextTier = 0;   /* 「下一个」栏里要显示的那一级（比 chuteTier 再后一个） */
       var chuteX = 0.5;
       var selectedTier = 0;
       var paused = false;
@@ -4024,9 +4030,11 @@ html, body { margin: 0; background: #000000; }
         return SPAWN_TIERS[0];
       }
 
-      function nextDropTier() {
+      /* 和参考站一致：抽到与手里那颗一样的就重抽（最多 6 次），
+         这样「下一个」永远不等于马上要掉的那颗，预览才有意义 */
+      function nextDropTier(avoid) {
         var t = pickDropTier();
-        if (t === chuteTier && rand() < 0.6) t = pickDropTier();
+        for (var i = 0; i < 6 && t === avoid; i++) t = pickDropTier();
         return t;
       }
 
@@ -4042,8 +4050,9 @@ html, body { margin: 0; background: #000000; }
       function renderNext() {
         if (nextSlot) {
           nextSlot.textContent = "";
-          var rn = Math.max(12, Math.min(22, tierRadius(chuteTier) * 0.62));
-          nextSlot.appendChild(buildChar(rn, chuteTier));
+          /* 右上角显示的是「再下一个」，不是马上就要掉的那个 */
+          var rn = Math.max(12, Math.min(22, tierRadius(nextTier) * 0.62));
+          nextSlot.appendChild(buildChar(rn, nextTier));
         }
         if (railHead) {
           var kids = railHead.querySelectorAll(".cg-char");
@@ -4072,7 +4081,9 @@ html, body { margin: 0; background: #000000; }
         wakeAll();
         makeBody(tier, x, dropCenterY);
         playDrop();
-        chuteTier = nextDropTier();
+        /* 队列前移：手里的换成原来「下一个」，再补一个新的「下一个」 */
+        chuteTier = nextTier;
+        nextTier = nextDropTier(chuteTier);
         renderNext();
       }
 
@@ -4223,25 +4234,31 @@ html, body { margin: 0; background: #000000; }
           var r = boardRows[i];
           if (!r || typeof r.n !== "string" || typeof r.s !== "number") continue;
           var key = r.n.slice(0, 12);
-          if (!best[key] || r.s > best[key].score) best[key] = { name: key, score: r.s };
+          if (!best[key]) best[key] = { name: key, score: r.s, t: r.t || 0 };
+          else if (r.s > best[key].score) {
+            best[key].score = r.s;
+            best[key].t = r.t || best[key].t;
+          }
         }
         var mine = nick || "玩家";
         if (score > 0 && (!best[mine] || score > best[mine].score)) {
-          best[mine] = { name: mine, score: score };
+          best[mine] = { name: mine, score: score, t: Date.now() };
         }
         var list = [];
         for (var k in best) {
           if (Object.prototype.hasOwnProperty.call(best, k)) {
-            list.push({ name: best[k].name, score: best[k].score, you: best[k].name === mine });
+            list.push({ name: best[k].name, score: best[k].score, t: best[k].t, you: best[k].name === mine });
           }
         }
         list.sort(function (a, b) {
           if (b.score !== a.score) return b.score - a.score;
+          if (a.t !== b.t) return a.t - b.t;   /* 同分先到先得 */
           if (a.you) return -1;
           if (b.you) return 1;
           return 0;
         });
-        return list.slice(0, 8);
+        /* 只保留前 10 名 */
+        return list.slice(0, 10);
       }
 
       function renderBoard() {
@@ -4289,8 +4306,8 @@ html, body { margin: 0; background: #000000; }
         if (boardFoot) {
           var line = "本机最高 " + best;
           if (boardState === "loading") line = "正在同步线上榜…";
-          else if (boardState === "ok" && boardLive) line = "● 实时同步中 · " + boardRows.length + " 条 · 本机最高 " + best;
-          else if (boardState === "ok") line = "线上榜 · " + boardRows.length + " 条 · 本机最高 " + best;
+          else if (boardState === "ok" && boardLive) line = "● 实时同步中 · 前 10 名 · 本机最高 " + best;
+          else if (boardState === "ok") line = "线上榜 · 前 10 名 · 本机最高 " + best;
           else if (boardState === "error") line = "连不上线上榜 · 离线模式 · 本机最高 " + best;
           boardFoot.textContent = line;
         }
@@ -4574,6 +4591,7 @@ html, body { margin: 0; background: #000000; }
               bounce: state.bounce,
               score: score,
               chuteTier: chuteTier,
+              nextTier: nextTier,
               chuteX: chuteX,
               tiers: TIERS.map(function (t) {
                 return { color: t.color, hair: t.hair, face: t.face };
@@ -4595,6 +4613,7 @@ html, body { margin: 0; background: #000000; }
         if (typeof p.score === "number") score = p.score;
         if (typeof p.chuteX === "number") chuteX = clamp(p.chuteX, 0, 1);
         if (typeof p.chuteTier === "number") chuteTier = clamp(Math.round(p.chuteTier), 0, MAX_TIER);
+        if (typeof p.nextTier === "number") nextTier = clamp(Math.round(p.nextTier), 0, MAX_TIER);
         if (Array.isArray(p.tiers)) {
           p.tiers.forEach(function (saved, t) {
             if (!saved || !TIERS[t]) return;
@@ -4639,6 +4658,7 @@ html, body { margin: 0; background: #000000; }
         hideDialog();
         updateScore(false);
         chuteTier = nextDropTier();
+        nextTier = nextDropTier(chuteTier);
         newGame();
         renderNext();
         setStatus("重新开始：场上只有一个小球，在场地里拖动选位、松手投放。");
@@ -4873,6 +4893,7 @@ html, body { margin: 0; background: #000000; }
           if (dangerEl) dangerEl.style.top = (6 + dangerY) + "px";
           if (rail) rail.style.setProperty("--cg-guide-h", Math.round(boxH - dropCenterY) + "px");
           chuteTier = nextDropTier();
+          nextTier = nextDropTier(chuteTier);
           newGame();
           renderNext();
           window.__cgParts = TIERS;
