@@ -3171,7 +3171,7 @@ html, body { margin: 0; background: #000000; }
               <span class="cg-shop-wallet-label">我的累计分数</span>
               <strong class="cg-shop-wallet-value" id="cg-shop-total">0</strong>
               <div class="cg-shop-bar"><i class="cg-shop-bar-fill" id="cg-shop-bar"></i></div>
-              <span class="cg-shop-wallet-hint" id="cg-shop-hint">再攒 5200 分可以换 1 枚复活币</span>
+              <span class="cg-shop-wallet-hint" id="cg-shop-hint">再攒 2000 分可以换 1 枚复活币</span>
             </div>
 
             <ul class="cg-shop-list">
@@ -3180,7 +3180,7 @@ html, body { margin: 0; background: #000000; }
                 <div class="cg-shop-item-text">
                   <span class="cg-shop-item-name">复活币 ×1</span>
                 </div>
-                <button type="button" class="cg-shop-buy cursor-interaction" id="cg-shop-buy">5200 兑换</button>
+                <button type="button" class="cg-shop-buy cursor-interaction" id="cg-shop-buy">2000 兑换</button>
               </li>
               <li class="cg-shop-item">
                 <span class="cg-shop-item-ico cg-shop-item-ico--skin"><i data-lucide="sparkles" aria-hidden="true"></i></span>
@@ -3507,7 +3507,7 @@ html, body { margin: 0; background: #000000; }
       var boardRetry = 0;
       var boardPollTimer = 0;
       /* 商店 / 累计分：永久榜数据 + 本机流水 */
-      var SHOP_PRICE = 5200;
+      var SHOP_PRICE = 2000;
       var SHOP_SKIN_PRICE = 18888;
       var SHOP_KEY = "cg-shop-v2";
       var SCORES_URL = "data/scores.json";
@@ -5264,7 +5264,7 @@ html, body { margin: 0; background: #000000; }
           }
           renderShop();
           fetchShopData(true);
-          setStatus("商店：每局结束的分数都会累加，5200 分换一枚复活币。");
+          setStatus("商店：每局结束的分数都会累加，" + SHOP_PRICE + " 分换一枚复活币。");
         } else {
           setStatus("回到游戏。");
         }
