@@ -3183,10 +3183,9 @@ html, body { margin: 0; background: #000000; }
             </div>
 
             <div class="cg-shop-wallet">
-              <span class="cg-shop-wallet-label">我的累计分数</span>
+              <span class="cg-shop-wallet-label">我的余额</span>
               <strong class="cg-shop-wallet-value" id="cg-shop-total">0</strong>
               <div class="cg-shop-bar"><i class="cg-shop-bar-fill" id="cg-shop-bar"></i></div>
-              <span class="cg-shop-wallet-hint" id="cg-shop-hint">再攒 2000 分可以换 1 枚复活币</span>
             </div>
 
             <ul class="cg-shop-list">
@@ -5211,13 +5210,10 @@ html, body { margin: 0; background: #000000; }
         var w = shopWallet();
         var left = Math.max(0, SHOP_PRICE - w.balance);
         var can = Math.floor(w.balance / SHOP_PRICE);
-        if (shopTotalEl) shopTotalEl.textContent = fmtNum(w.earned);
+        /* 大数字显示“余额”：买了就扣掉，像钱包一样 */
+        if (shopTotalEl) shopTotalEl.textContent = fmtNum(w.balance);
         if (shopBarEl) shopBarEl.style.width = Math.min(100, (w.balance / SHOP_PRICE) * 100).toFixed(1) + "%";
-        if (shopHintEl) {
-          shopHintEl.textContent = left > 0
-            ? "还差 " + fmtNum(left) + " 分就能换 1 枚（现在够换 " + can + " 枚）"
-            : "够换 " + can + " 枚复活币";
-        }
+        /* 不再显示“还差多少分才能买”，保持界面干净 */
         if (shopBuyBtn) {
           shopBuyBtn.disabled = w.balance < SHOP_PRICE;
           /* 价格永远显示，买不起就把按钮置灰（不再用“分数不够”把价格顶掉） */
