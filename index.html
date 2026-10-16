@@ -5521,7 +5521,7 @@ html, body { margin: 0; background: #000000; }
         if (dialogScoreEl) dialogScoreEl.textContent = String(score);
         if (dialogNoteEl) {
           dialogNoteEl.textContent = score > 0
-            ? "继续玩、重新开始或结束本局；结束时这 " + score + " 分会记进累计余额"
+            ? "结束本局会把 " + score + " 分记进累计余额；重新开始则不结算"
             : "继续玩、重新开始或结束本局";
         }
         if (dialogActionsEl) dialogActionsEl.hidden = true;
@@ -5559,7 +5559,7 @@ html, body { margin: 0; background: #000000; }
         setStatus("本局已结束，" + score + " 分已记入累计余额。");
       }
 
-      /* 重新开始：同样先把本局分数结算进余额，然后直接开新局 */
+      /* 重新开始：不结算，本局分数直接丢掉，马上开新局 */
       function restartFromPause() {
         if (pauseActionsEl) pauseActionsEl.hidden = true;
         paused = false;
@@ -5569,10 +5569,8 @@ html, body { margin: 0; background: #000000; }
           pauseBtn.setAttribute("aria-label", "暂停");
         }
         hideDialog();
-        var got = score;
-        submitScore();
         restart();
-        setStatus(got > 0 ? "已重新开始，" + got + " 分已记入累计余额。" : "已重新开始。");
+        setStatus("已重新开始（本局分数不结算）。");
       }
 
       function toggleSound() {
