@@ -1,0 +1,31 @@
+name: collect-scores
+
+# 把 ntfy 上的成绩收进仓库：永久保留，顺便算出累计分
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  push:
+    paths:
+      - "tools/collect.js"
+      - ".github/workflows/collect.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: node tools/collect.js
+      - name: commit
+        run: |
+          git config user.name "score-bot"
+          git config user.email "score-bot@users.noreply.github.com"
+          git add data/scores.json data/count.json
+          git diff --cached --quiet || git commit -m "chore: collect scores"
+          git push
