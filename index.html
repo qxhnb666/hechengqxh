@@ -2538,13 +2538,86 @@ html, body { margin: 0; background: #000000; }
     /* ---------- 商店 ---------- */
     #cg-root .cg-shop {
       gap: 10px;
+      /* 手机上内容可能比面板高：面板自己可以上下滑，不然会被外层 overflow:hidden 裁掉 */
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      -webkit-overflow-scrolling: touch;
+      touch-action: pan-y;
+      padding-bottom: 16px;
+    }
+
+    /* 小屏（矮一点的手机）自动压缩一档，尽量不用滚就能看全 */
+    @media (max-height: 730px) {
+      #cg-root .cg-shop {
+        gap: 7px;
+        padding: 11px 13px 15px;
+      }
+
+      #cg-root .cg-shop-wallet {
+        padding: 9px 12px;
+        gap: 4px;
+      }
+
+      #cg-root .cg-shop-wallet-value {
+        font-size: 24px;
+      }
+
+      #cg-root .cg-shop-list {
+        gap: 6px;
+      }
+
+      #cg-root .cg-shop-item {
+        padding: 8px 10px;
+        gap: 9px;
+      }
+
+      #cg-root .cg-shop-item-ico {
+        width: 32px;
+        height: 32px;
+        border-radius: 10px;
+      }
+
+      #cg-root .cg-shop-item-desc,
+      #cg-root .cg-shop-note {
+        display: none;
+      }
+
+      #cg-root .cg-shop-mine {
+        padding: 8px 12px;
+      }
+
+      #cg-root .cg-shop-mine-value {
+        font-size: 16px;
+      }
+
+      #cg-root .cg-shop-skin {
+        padding: 8px 12px;
+      }
+
+      #cg-root .cg-shop-buy {
+        padding: 7px 9px;
+        font-size: 11.5px;
+      }
+
+      #cg-root .cg-shop-item-text {
+        min-width: 56px;
+      }
+
+      #cg-root .cg-shop-item-name {
+        font-size: 13px;
+      }
+
+      #cg-root .cg-shop-skin-btn {
+        padding: 5px 10px;
+        font-size: 12px;
+      }
     }
 
     #cg-root .cg-shop-wallet {
       display: flex;
       flex-direction: column;
-      gap: 6px;
-      padding: 12px 14px;
+      gap: 5px;
+      padding: 11px 14px;
       border-radius: 16px;
       background: linear-gradient(160deg, #fffdf7, #ffeed2);
       box-shadow: inset 0 0 0 1.5px rgba(233, 190, 120, 0.5);
@@ -2557,7 +2630,7 @@ html, body { margin: 0; background: #000000; }
     }
 
     #cg-root .cg-shop-wallet-value {
-      font-size: 30px;
+      font-size: 27px;
       line-height: 1.1;
       font-weight: 600;
       color: var(--cg-ink);
@@ -2632,6 +2705,10 @@ html, body { margin: 0; background: #000000; }
       font-size: 14px;
       font-weight: 600;
       color: var(--cg-ink);
+      /* 窄屏不要一个字一行 */
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
     #cg-root .cg-shop-item-desc {
@@ -2730,8 +2807,8 @@ html, body { margin: 0; background: #000000; }
 
     #cg-root .cg-shop-note {
       margin: 0;
-      font-size: 11.5px;
-      line-height: 1.5;
+      font-size: 11px;
+      line-height: 1.4;
       color: var(--cg-ink-faint);
     }
 
