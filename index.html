@@ -1884,6 +1884,18 @@ html, body { margin: 0; background: #000000; }
       display: none;
     }
 
+    #cg-root .cg-face-pause {
+      display: none;
+    }
+
+    #cg-root .cg-overlay[data-kind="pause"] .cg-face-revive {
+      display: none;
+    }
+
+    #cg-root .cg-overlay[data-kind="pause"] .cg-face-pause {
+      display: block;
+    }
+
     #cg-root .cg-overlay[data-kind="over"] .cg-face-revive {
       display: none;
     }
@@ -3091,9 +3103,6 @@ html, body { margin: 0; background: #000000; }
                 <i data-lucide="volume-2" class="cg-icon-on" aria-hidden="true"></i>
                 <i data-lucide="volume-off" class="cg-icon-off" aria-hidden="true"></i>
               </button>
-              <button type="button" class="cg-op cursor-interaction" id="cg-restart" aria-label="重新开始">
-                <i data-lucide="rotate-ccw" aria-hidden="true"></i>
-              </button>
               <button type="button" class="cg-op cursor-interaction" id="cg-theme" aria-label="切换背景颜色">
                 <i data-lucide="moon" class="cg-icon-dark" aria-hidden="true"></i>
                 <i data-lucide="sun" class="cg-icon-warm" aria-hidden="true"></i>
@@ -3125,6 +3134,7 @@ html, body { margin: 0; background: #000000; }
               <div class="cg-dialog-face" aria-hidden="true">
                 <i data-lucide="heart" class="cg-face-revive"></i>
                 <i data-lucide="flag" class="cg-face-over"></i>
+                <i data-lucide="pause" class="cg-face-pause"></i>
               </div>
               <h2 class="cg-dialog-title" id="cg-dialog-title">还能再救一下</h2>
               <p class="cg-dialog-score">本局得分 <strong id="cg-dialog-score">0</strong></p>
@@ -3137,6 +3147,11 @@ html, body { margin: 0; background: #000000; }
               <div class="cg-dialog-actions" id="cg-over-actions" hidden>
                 <button type="button" class="cg-dialog-btn cursor-interaction" id="cg-over-board">排行榜</button>
                 <button type="button" class="cg-dialog-btn cg-dialog-primary cursor-interaction" id="cg-again">再来一局</button>
+              </div>
+              <div class="cg-dialog-actions" id="cg-pause-actions" hidden>
+                <button type="button" class="cg-dialog-btn cg-dialog-primary cursor-interaction" id="cg-pause-resume">继续游戏</button>
+                <button type="button" class="cg-dialog-btn cursor-interaction" id="cg-pause-restart">重新开始</button>
+                <button type="button" class="cg-dialog-btn cursor-interaction" id="cg-pause-end">结束游戏</button>
               </div>
             </div>
           </div>
@@ -3246,6 +3261,11 @@ html, body { margin: 0; background: #000000; }
       var skinAnimeBtn = document.getElementById("cg-skin-anime");
       var themeBtn = document.getElementById("cg-theme");
       var rootEl = document.getElementById("cg-root");
+      var pauseActionsEl = document.getElementById("cg-pause-actions");
+      var pauseResumeBtn = document.getElementById("cg-pause-resume");
+      var pauseEndBtn = document.getElementById("cg-pause-end");
+      var pauseRestartBtn = document.getElementById("cg-pause-restart");
+      var overRankEl = document.getElementById("cg-over-rank");
       var boardCloseBtn = document.getElementById("cg-board-close");
       var boardRefreshBtn = document.getElementById("cg-board-refresh");
       var nickInput = document.getElementById("cg-nick");
@@ -5479,13 +5499,80 @@ html, body { margin: 0; background: #000000; }
 
       /* ================= 交互绑定 ================= */
       function togglePause() {
-        paused = !paused;
-        stage.dataset.paused = paused ? "1" : "0";
-        if (pauseBtn) {
-          pauseBtn.setAttribute("aria-pressed", paused ? "true" : "false");
-          pauseBtn.setAttribute("aria-label", paused ? "继续" : "暂停");
+        if (paused) {
+          resumeGame();
+          return;
         }
-        setStatus(paused ? "已暂停：物理和音效都停住。" : "继续游戏。");
+        showPauseDialog();
+      }
+
+      /* 暂停：给出「继续游戏 / 结束游戏」两个选择 */
+      function showPauseDialog() {
+        if (!overlayEl || gameOver) return;
+        paused = true;
+        stage.dataset.paused = "1";
+        if (pauseBtn) {
+          pauseBtn.setAttribute("aria-pressed", "true");
+          pauseBtn.setAttribute("aria-label", "继续");
+        }
+        overlayEl.hidden = false;
+        overlayEl.dataset.kind = "pause";
+        if (dialogTitleEl) dialogTitleEl.textContent = "已暂停";
+        if (dialogScoreEl) dialogScoreEl.textContent = String(score);
+        if (dialogNoteEl) {
+          dialogNoteEl.textContent = score > 0
+            ? "继续玩、重新开始或结束本局；结束时这 " + score + " 分会记进累计余额"
+            : "继续玩、重新开始或结束本局";
+        }
+        if (dialogActionsEl) dialogActionsEl.hidden = true;
+        if (overActionsEl) overActionsEl.hidden = true;
+        if (overRankEl) overRankEl.hidden = true;
+        if (pauseActionsEl) pauseActionsEl.hidden = false;
+        setStatus("已暂停。");
+      }
+
+      function resumeGame() {
+        paused = false;
+        stage.dataset.paused = "0";
+        if (pauseBtn) {
+          pauseBtn.setAttribute("aria-pressed", "false");
+          pauseBtn.setAttribute("aria-label", "暂停");
+        }
+        if (pauseActionsEl) pauseActionsEl.hidden = true;
+        hideDialog();
+        setStatus("继续游戏。");
+      }
+
+      /* 结束本局：把分数结算进累计余额（并上榜），然后弹正常结算面板 */
+      function endGameFromPause() {
+        if (pauseActionsEl) pauseActionsEl.hidden = true;
+        paused = false;
+        stage.dataset.paused = "0";
+        if (pauseBtn) {
+          pauseBtn.setAttribute("aria-pressed", "false");
+          pauseBtn.setAttribute("aria-label", "暂停");
+        }
+        hideDialog();
+        gameOver = true;
+        submitScore();
+        showDialog("over");
+        setStatus("本局已结束，" + score + " 分已记入累计余额。");
+      }
+
+      /* 重新开始：同样先把本局分数结算进余额，然后直接开新局 */
+      function restartFromPause() {
+        if (pauseActionsEl) pauseActionsEl.hidden = true;
+        paused = false;
+        stage.dataset.paused = "0";
+        if (pauseBtn) {
+          pauseBtn.setAttribute("aria-pressed", "false");
+          pauseBtn.setAttribute("aria-label", "暂停");
+        }
+        hideDialog();
+        var got = score;
+        submitScore();
+        restart();
+        setStatus(got > 0 ? "已重新开始，" + got + " 分已记入累计余额。" : "已重新开始。");
       }
 
       function toggleSound() {
@@ -5567,6 +5654,9 @@ html, body { margin: 0; background: #000000; }
         if (shopBuyBtn) shopBuyBtn.addEventListener("click", shopBuy);
         if (themeBtn) themeBtn.addEventListener("click", toggleTheme);
         if (shopBuySkinBtn) shopBuySkinBtn.addEventListener("click", shopBuySkin);
+        if (pauseResumeBtn) pauseResumeBtn.addEventListener("click", resumeGame);
+        if (pauseRestartBtn) pauseRestartBtn.addEventListener("click", restartFromPause);
+        if (pauseEndBtn) pauseEndBtn.addEventListener("click", endGameFromPause);
         if (skinPhotoBtn) skinPhotoBtn.addEventListener("click", function () { setSkin("photo"); });
         if (skinAnimeBtn) skinAnimeBtn.addEventListener("click", function () { setSkin("anime"); });
         if (reviveBtn) reviveBtn.addEventListener("click", useRevive);
